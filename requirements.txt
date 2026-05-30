@@ -1,0 +1,14 @@
+asgiref==3.11.1
+certifi==2026.5.20
+charset-normalizer==3.4.7
+Django==6.0.5
+groq==1.4.0
+gunicorn==26.0.0
+huggingface_hub==1.17.0
+idna==3.17
+pillow==12.2.0
+python-dotenv==1.2.2
+requests==2.34.2
+sqlparse==0.5.5
+urllib3==2.7.0
+whitenoise==6.12.0
