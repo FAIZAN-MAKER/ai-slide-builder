@@ -8,6 +8,8 @@
     <script src="https://unpkg.com/lucide@latest"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <style>
         body { font-family: 'Inter', sans-serif; }
         .perspective-1000 { perspective: 1000px; }
@@ -27,7 +29,7 @@
             <a href="#" class="text-blue-600 font-medium border-b-2 border-blue-600 pb-0.5">Home</a>
         </nav>
 
-        <button class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 rounded-full font-medium text-sm transition-colors shadow-sm">
+        <button id="newDeckBtn" class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 rounded-full font-medium text-sm transition-colors shadow-sm cursor-pointer">
             New deck
         </button>
     </header>
@@ -42,7 +44,7 @@
             <input 
                 id="topicInput"
                 type="text" 
-                placeholder="Explain quantum computing basics" 
+                placeholder="Enter a topic for your slides..." 
                 class="w-full px-6 py-4 rounded-full border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 shadow-sm text-gray-600 text-lg placeholder:text-gray-400 bg-white"
             />
             <button
@@ -81,13 +83,6 @@
                 Download all slides as PNG
             </button>
 
-            <button
-                id="shareBtn"
-                class="flex items-center gap-2 px-6 py-3 bg-blue-600 text-white font-medium rounded-xl shadow-sm transition-all text-sm hover:-translate-y-0.5"
-            >
-                Share
-            </button>
-
         </div>
 
 
@@ -95,9 +90,15 @@
             id="loadingOverlay"
             class="fixed inset-0 bg-white/60 backdrop-blur-sm flex items-center justify-center z-50 opacity-0 pointer-events-none transition-opacity duration-300"
         >
-            <div class="flex flex-col items-center gap-3">
+            <div class="flex flex-col items-center gap-4 bg-white p-8 rounded-2xl shadow-xl border border-gray-100 max-w-sm w-full mx-4">
                 <div class="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-                <p class="text-gray-700 font-medium text-lg">Generating slides…</p>
+                <div class="w-full">
+                    <div class="bg-gray-100 rounded-full h-2.5 overflow-hidden">
+                        <div id="progressBar" class="bg-blue-600 h-full rounded-full transition-all duration-300 ease-out" style="width: 0%"></div>
+                    </div>
+                </div>
+                <p id="progressText" class="text-gray-700 font-medium text-sm text-center">Starting...</p>
+                <p id="progressPercent" class="text-gray-400 text-xs">0%</p>
             </div>
         </div>
 
@@ -105,61 +106,121 @@
 
     <script>
         const sharedSlides = {{shared_slides|default:"null"|safe}};
-        const slidesData = sharedSlides || [
-            {
-                id: 0,
-                title: "Introduction to Quantum Computing",
-                image: "https://images.unsplash.com/photo-1635070041078-e363dbe005cb?auto=format&fit=crop&w=800&q=80",
-            },
-            {
-                id: 1,
-                title: "Quantum Superposition",
-                image: "https://images.unsplash.com/photo-1550751827-4bd374c3f58b?auto=format&fit=crop&w=800&q=80",
-            },
-            {
-                id: 2,
-                title: "Quantum Entanglement",
-                image: "https://images.unsplash.com/photo-1605647540924-852290f6b0d5?auto=format&fit=crop&w=800&q=80",
-            },
-            {
-                id: 3,
-                title: "Future of Computing",
-                image: "https://images.unsplash.com/photo-1550751827-4bd374c3f58b?auto=format&fit=crop&w=800&q=80",
-            },
-            {
-                id: 4,
-                title: "Qubit Architecture",
-                image: "https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=800&q=80",
-            }
+
+        function getInitialSlides() {
+            if (sharedSlides) return sharedSlides;
+            try {
+                const saved = localStorage.getItem('slidesData');
+                if (saved) return JSON.parse(saved);
+            } catch (e) {}
+            return null;
+        }
+
+        const slidesData = getInitialSlides() || [
+            { id: 0, title: "Introduction to Quantum Computing", content: ["What is quantum computing?", "Qubits vs classical bits", "Why it matters for the future", "Key players in the field"], image: null },
+            { id: 1, title: "Quantum Superposition", content: ["Qubits can be 0, 1, or both simultaneously", "Enables parallel computation", "Probabilistic measurement outcomes", "Foundation of quantum algorithms"], image: null },
+            { id: 2, title: "Quantum Entanglement", content: ["Particles linked across any distance", "Instant correlation between qubits", "Teleportation and quantum cryptography", "Bell's theorem in practice"], image: null },
+            { id: 3, title: "Future of Computing", content: ["Exponential speedup for specific problems", "Drug discovery and materials science", "Cryptography and security implications", "Hybrid classical-quantum systems"], image: null },
+            { id: 4, title: "Qubit Architecture", content: ["Superconducting qubits (IBM, Google)", "Trapped ion qubits (IonQ, Honeywell)", "Photonic qubits (PsiQuantum)", "Topological qubits (Microsoft)"], image: null },
+        ];
+
+        const PLACEHOLDER_BGS = [
+            'from-purple-600 to-blue-600',
+            'from-blue-600 to-teal-500',
+            'from-orange-500 to-pink-500',
+            'from-green-500 to-teal-600',
+            'from-indigo-500 to-purple-600',
         ];
 
         let activeSlide = 1;
+        let isDownloading = false;
         const container = document.getElementById('slides-container');
+
+        function buildSlideContent(slide, index) {
+            return (slide.content || []).map(p => `
+                    <li class="flex items-start gap-2">
+                        <span class="w-1 h-1 rounded-full bg-white/70 mt-2 shrink-0"></span>
+                        <span>${p}</span>
+                    </li>
+                `).join('');
+        }
+
+        function renderGradientSlide(slideEl, slide, index, content) {
+            slideEl.innerHTML = `
+                        <div class="w-full h-full flex flex-col bg-gradient-to-br ${PLACEHOLDER_BGS[index % PLACEHOLDER_BGS.length]} p-6 md:p-10">
+                            <div class="flex items-start justify-between mb-2">
+                                <span class="text-xs font-semibold text-white/80 bg-white/20 backdrop-blur-md px-3 py-1 rounded-full border border-white/30">Slide ${index + 1}</span>
+                            </div>
+                            <div class="flex-1 flex flex-col justify-center">
+                                <h3 class="text-xl md:text-3xl font-bold text-white mb-3 md:mb-4 leading-tight">${slide.title}</h3>
+                                <ul class="flex flex-col gap-2 md:gap-2.5 text-sm md:text-base text-white/85">
+                                    ${content}
+                                </ul>
+                            </div>
+                            <div class="text-center text-xs text-white/50 mt-2">AI Generated Slide</div>
+                        </div>
+                    `;
+        }
+
+        function renderImageSlide(slideEl, slide, index, content, url) {
+            slideEl.innerHTML = `
+                        <img src="${url}" alt="${slide.title}" class="absolute inset-0 w-full h-full object-cover" />
+                        <div class="absolute inset-0 bg-gradient-to-t from-black/85 via-black/40 to-transparent"></div>
+                        <div class="absolute bottom-0 left-0 right-0 p-5 md:p-8 text-white">
+                            <div class="flex items-center gap-2 mb-2">
+                                <span class="text-xs font-semibold bg-white/20 backdrop-blur-md px-3 py-1 rounded-full border border-white/30">Slide ${index + 1}</span>
+                            </div>
+                            <h3 class="text-lg md:text-2xl font-bold mb-2 leading-tight">${slide.title}</h3>
+                            <ul class="flex flex-col gap-1.5 text-xs md:text-sm text-white/90">
+                                ${content}
+                            </ul>
+                        </div>
+                    `;
+        }
+
+        function sleep(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        async function loadImagesSequentially() {
+            for (let i = 0; i < slidesData.length; i++) {
+                const slide = slidesData[i];
+                if (!slide.image) continue;
+
+                const el = document.getElementById(`slide-${i}`);
+                if (!el) continue;
+
+                if (i > 0) await sleep(3000);
+                const content = buildSlideContent(slide, i);
+
+                try {
+                    await new Promise((resolve, reject) => {
+                        const img = new Image();
+                        img.onload = resolve;
+                        img.onerror = reject;
+                        img.src = slide.image;
+                    });
+                    renderImageSlide(el, slide, i, content, slide.image);
+                } catch {
+                    renderGradientSlide(el, slide, i, content);
+                }
+            }
+        }
 
         function init() {
             slidesData.forEach((slide, index) => {
                 const slideEl = document.createElement('div');
                 slideEl.id = `slide-${index}`;
                 slideEl.className = "absolute w-[320px] md:w-[600px] h-[220px] md:h-[400px] bg-white rounded-2xl md:rounded-3xl shadow-xl overflow-hidden border border-gray-100 transition-all duration-500 ease-out transform";
-                
-                slideEl.innerHTML = `
-                    <img 
-                        src="${slide.image}" 
-                        alt="${slide.title}"
-                        class="w-full h-full object-cover"
-                    />
-                    <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent p-6 md:p-8 text-white">
-                        <h3 class="text-xl md:text-3xl font-bold mb-2">${slide.title}</h3>
-                        <p class="text-sm md:text-base text-gray-200 opacity-90">AI Generated Slide Preview</p>
-                    </div>
-                    <div class="absolute top-4 right-4 bg-white/20 backdrop-blur-md px-3 py-1 rounded-full border border-white/30">
-                        <span class="text-xs font-semibold text-white">Slide ${index + 1}</span>
-                    </div>
-                `;
+
+                const content = buildSlideContent(slide, index);
+                renderGradientSlide(slideEl, slide, index, content);
+
                 container.appendChild(slideEl);
             });
 
             updateSlides();
+            loadImagesSequentially();
         }
 
         function updateSlides() {
@@ -186,12 +247,33 @@
             });
         }
 
+        function showDownloadOverlay(current, total, message) {
+            const overlay = document.getElementById('loadingOverlay');
+            document.getElementById('progressText').textContent = message;
+            const pct = total > 0 ? Math.round(Math.min(current + 1, total) / total * 100) : 0;
+            document.getElementById('progressBar').style.width = pct + '%';
+            document.getElementById('progressPercent').textContent = pct + '%';
+            overlay.style.opacity = '1';
+            overlay.style.pointerEvents = 'auto';
+        }
+
+        function hideDownloadOverlay() {
+            const overlay = document.getElementById('loadingOverlay');
+            overlay.style.opacity = '0';
+            overlay.style.pointerEvents = 'none';
+        }
+
+        function getFileName(ext) {
+            const topic = document.getElementById('topicInput').value.trim() || 'slides';
+            return topic.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + ext;
+        }
+
         document.addEventListener("DOMContentLoaded", () => {
             const input = document.getElementById("topicInput");
             const generateBtn = document.getElementById("generateBtn");
-            const downloaddPdfBtn = document.getElementById("downloadPdfBtn");
+            const downloadPdfBtn = document.getElementById("downloadPdfBtn");
             const downloadPngBtn = document.getElementById("downloadPngBtn");
-            const shareBtn = document.getElementById("shareBtn");
+            const newDeckBtn = document.getElementById("newDeckBtn");
             init();
             lucide.createIcons();
 
@@ -200,11 +282,13 @@
                 if (!topic) return;
 
                 generateBtn.disabled = true;
-                document.getElementById("generateText").textContent = "Generating...";
+                document.getElementById("generateText").textContent = "Generating slides...";
                 document.getElementById("spinner").classList.remove("hidden");
                 document.getElementById("loadingOverlay").style.opacity = "1";
                 document.getElementById("loadingOverlay").style.pointerEvents = "auto";
-
+                document.getElementById("progressBar").style.width = "0%";
+                document.getElementById("progressPercent").textContent = "0%";
+                document.getElementById("progressText").textContent = "Starting...";
 
                 try {
                     const response = await fetch('/api/generate_slides/', {
@@ -213,21 +297,50 @@
                         body: JSON.stringify({ topic }),
                     });
 
-                    const data = await response.json();
-                    console.log('Respons data:', data);
-                    
-                    if (data.slides && Array.isArray(data.slides)) {
-                        slidesData.length = 0;
-                        data.slides.forEach((s) => slidesData.push(s));
-                        activeSlide = 0;
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buffer = '';
 
-                        container.innerHTML = '';
-                        init();
-                    } else {
-                        console.error('No slides in response');
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\n');
+                        buffer = lines.pop() || '';
+
+                        for (const line of lines) {
+                            if (!line.startsWith('data: ')) continue;
+                            try {
+                                const event = JSON.parse(line.slice(6));
+                                const type = event.type;
+
+                                if (type === 'progress') {
+                                    document.getElementById("progressBar").style.width = event.percent + '%';
+                                    document.getElementById("progressPercent").textContent = event.percent + '%';
+                                    document.getElementById("progressText").textContent = event.message;
+                                } else if (type === 'result') {
+                                    const slides = event.slides;
+                                    if (slides && Array.isArray(slides)) {
+                                        slidesData.length = 0;
+                                        slides.forEach((s) => slidesData.push(s));
+                                        localStorage.setItem('slidesData', JSON.stringify(slidesData));
+                                        activeSlide = 0;
+                                        container.innerHTML = '';
+                                        init();
+                                    }
+                                } else if (type === 'error') {
+                                    console.error('API error:', event.message);
+                                    alert('Error: ' + event.message);
+                                }
+                            } catch (e) {
+                                console.warn('Failed to parse SSE event:', line, e);
+                            }
+                        }
                     }
                 } catch (err) {
                     console.error("Error calling API", err);
+                    alert("Failed to generate slides. Check console for details.");
                 } finally {
                     generateBtn.disabled = false;
                     document.getElementById("spinner").classList.add("hidden");
@@ -238,67 +351,99 @@
                 }
             });
 
-            downloadPngBtn.addEventListener("click", () => {
-                slidesData.forEach((slide, index) => {
-                    if (!slide.image) return;
+            downloadPngBtn.addEventListener("click", async () => {
+                if (isDownloading || !window.html2canvas || !window.JSZip) return;
+                isDownloading = true;
+                downloadPngBtn.disabled = true;
+                downloadPdfBtn.disabled = true;
 
-                    const link = document.createElement("a");
-                    link.href = slide.image;
-                    link.download = `slide_${index + 1}.png`;
+                try {
+                    const zip = new JSZip();
+                    for (let i = 0; i < slidesData.length; i++) {
+                        const el = document.getElementById(`slide-${i}`);
+                        if (!el) continue;
+                        showDownloadOverlay(i, slidesData.length, `Rendering slide ${i + 1} of ${slidesData.length}...`);
+                        const canvas = await html2canvas(el, { scale: 2, useCORS: true, allowTaint: false });
+                        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+                        zip.file(`slide_${i + 1}.png`, blob);
+                    }
+
+                    showDownloadOverlay(0, 1, 'Creating archive...');
+                    const zipBlob = await zip.generateAsync({ type: 'blob' });
+                    const url = URL.createObjectURL(zipBlob);
+                    const link = document.createElement('a');
+                    link.href = url;
+                    link.download = getFileName('.zip');
                     document.body.appendChild(link);
                     link.click();
                     document.body.removeChild(link);
-                });
+                    URL.revokeObjectURL(url);
+                } catch (err) {
+                    console.error('PNG download failed', err);
+                    alert('Failed to download PNGs. Please try again.');
+                } finally {
+                    isDownloading = false;
+                    downloadPngBtn.disabled = false;
+                    downloadPdfBtn.disabled = false;
+                    hideDownloadOverlay();
+                }
             });
 
-            downloadPdfBtn.addEventListener("click", () => {
-                if (!window.jspdf) return;
+            downloadPdfBtn.addEventListener("click", async () => {
+                if (isDownloading || !window.jspdf || !window.html2canvas) return;
+                isDownloading = true;
+                downloadPngBtn.disabled = true;
+                downloadPdfBtn.disabled = true;
 
-                const { jsPDF } = window.jspdf;
-                const pdf = new jsPDF("landscape", "px", "a4");
-
-                let firstPage = true;
-
-                slidesData.forEach((slide) => {
-                    if (!slide.image) return;
-
-                    // only treat data urls as AI slides
-                    if (!slide.image.startsWith("data:")) {
-                        return;
-                    }
-
-                    const imgData = slide.image;
-                    const imgProps = pdf.getImageProperties(imgData);
+                try {
+                    const { jsPDF } = window.jspdf;
+                    const pdf = new jsPDF('landscape', 'px', 'a4');
                     const pdfWidth = pdf.internal.pageSize.getWidth();
-                    const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
-                    const offsetY = (pdf.internal.pageSize.getHeight() - pdfHeight) / 2;
-                    const format = imgData.includes("image/png") ? "PNG" : "JPEG";
+                    const pdfHeight = pdf.internal.pageSize.getHeight();
 
-                    if (!firstPage) {
-                        pdf.addPage();
+                    for (let i = 0; i < slidesData.length; i++) {
+                        const el = document.getElementById(`slide-${i}`);
+                        if (!el) continue;
+
+                        showDownloadOverlay(i, slidesData.length, `Rendering slide ${i + 1} of ${slidesData.length}...`);
+                        const canvas = await html2canvas(el, { scale: 2, useCORS: true, allowTaint: false });
+                        const imgData = canvas.toDataURL('image/png');
+                        const imgHeight = (canvas.height * pdfWidth) / canvas.width;
+                        const offsetY = (pdfHeight - imgHeight) / 2;
+
+                        if (i > 0) pdf.addPage();
+                        pdf.addImage(imgData, 'PNG', 0, offsetY, pdfWidth, imgHeight);
                     }
-                    firstPage = false;
 
-                    pdf.addImage(imgData, format, 0, offsetY, pdfWidth, pdfHeight);
-                });
-
-                pdf.save("ai_slides.pdf");
+                    pdf.save(getFileName('.pdf'));
+                } catch (err) {
+                    console.error('PDF download failed', err);
+                    alert('Failed to download PDF. Please try again.');
+                } finally {
+                    isDownloading = false;
+                    downloadPngBtn.disabled = false;
+                    downloadPdfBtn.disabled = false;
+                    hideDownloadOverlay();
+                }
             });
 
 
 
-            shareBtn.addEventListener("click", async () => {
-                const response = await fetch("/api/share/", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ slides: slidesData }),
-                });
-
-                const data = await response.json();
-                const code = data.code;
-                const link = `${window.location.origin}/view/${code}`;
-
-                alert("Share this link:\n\n" + link);
+            newDeckBtn.addEventListener("click", () => {
+                localStorage.removeItem('slidesData');
+                input.value = '';
+                slidesData.length = 0;
+                const defaultData = [
+                    { id: 0, title: "Introduction to Quantum Computing", content: ["What is quantum computing?", "Qubits vs classical bits", "Why it matters for the future", "Key players in the field"], image: null },
+                    { id: 1, title: "Quantum Superposition", content: ["Qubits can be 0, 1, or both simultaneously", "Enables parallel computation", "Probabilistic measurement outcomes", "Foundation of quantum algorithms"], image: null },
+                    { id: 2, title: "Quantum Entanglement", content: ["Particles linked across any distance", "Instant correlation between qubits", "Teleportation and quantum cryptography", "Bell's theorem in practice"], image: null },
+                    { id: 3, title: "Future of Computing", content: ["Exponential speedup for specific problems", "Drug discovery and materials science", "Cryptography and security implications", "Hybrid classical-quantum systems"], image: null },
+                    { id: 4, title: "Qubit Architecture", content: ["Superconducting qubits (IBM, Google)", "Trapped ion qubits (IonQ, Honeywell)", "Photonic qubits (PsiQuantum)", "Topological qubits (Microsoft)"], image: null },
+                ];
+                defaultData.forEach((s) => slidesData.push(s));
+                activeSlide = 1;
+                container.innerHTML = '';
+                init();
             });
 
 
